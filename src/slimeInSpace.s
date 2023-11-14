@@ -1,13 +1,27 @@
+PPUCTRL   = $2000
+PPUMASK   = $2001
+PPUSTATUS = $2002
+PPUADDR   = $2006
+PPUDATA   = $2007
+OAMADDR   = $2003
+OAMDMA    = $4014
+
+
 .segment "HEADER"
-  ; .byte "NES", $1A      ; iNES header identifier
-  .byte $4E, $45, $53, $1A
-  .byte 2               ; 2x 16KB PRG code
-  .byte 1               ; 1x  8KB CHR data
-  .byte $01, $00        ; mapper 0, vertical mirroring
+.byte $4e, $45, $53, $1a ; Magic string that always begins an iNES header
+.byte $02        ; Number of 16KB PRG-ROM banks
+.byte $01        ; Number of 8KB CHR-ROM banks
+.byte %00000000  ; Horizontal mirroring, no save RAM, no mapper
+.byte %00000000  ; No special-case flags set, no mapper
+.byte $00        ; No PRG-RAM present
+.byte $00        ; NTSC format
+      ; mapper 0, vertical mirroring
 
 .segment "ZEROPAGE"
   player_x: .res 1
   player_y: .res 1
+  player_dir: .res 1
+  pad1: .res 1
   
 .segment "VECTORS"
   ;; When an NMI happens (once per frame if enabled) the label nmi:
@@ -28,40 +42,94 @@ STA player_x
 LDA #$a0
 STA player_y
 
+
+.proc read_controller1
+  PHA
+  TXA
+  PHA
+  PHP
+
+  ; write a 1, then a 0, to CONTROLLER1
+  ; to latch button states
+  LDA #$01
+  STA CONTROLLER1
+  LDA #$00
+  STA CONTROLLER1
+
+  LDA #%00000001
+  STA pad1
+
+get_buttons:
+  LDA CONTROLLER1 ; Read next button's state
+  LSR A           ; Shift button state right, into carry flag
+  ROL pad1        ; Rotate button state from carry flag
+                  ; onto right side of pad1
+                  ; and leftmost 0 of pad1 into carry flag
+  BCC get_buttons ; Continue until original "1" is in carry flag
+
+  PLP
+  PLA
+  TAX
+  PLA
+  RTS
+.endproc
+
+
+nmi:
+  LDA #$00
+  STA OAMADDR
+  LDA #$02
+  STA OAMDMA
+  LDA #$00
+
+; update tiles *after* DMA transfer
+JSR update_player
+JSR draw_player
+
+STA $2005
+STA $2005
+;This is the PPU clean up section, so rendering the next frame starts properly.
+LDA #%10010000
+STA $2000    ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
+LDA #%00011110
+STA $2001    ; enable sprites, enable background, no clipping on left side
+
+RTI           ; return from interrupt
+
+; RTI
+
 reset:
-  sei		; disable IRQs
-  cld		; disable decimal mode
-  ldx #$40
-  stx $4017	; disable APU frame IRQ
-  ldx #$ff 	; Set up stack
-  txs		;  .
-  inx		; now X = 0
-  stx $2000	; disable NMI
-  stx $2001 	; disable rendering
-  stx $4010 	; disable DMC IRQs
+    SEI
+  CLD
+  LDX #$00
+  STX PPUCTRL
+  STX PPUMASK
 
-;; first wait for vblank to make sure PPU is ready
-vblankwait1:
-  bit $2002
-  bpl vblankwait1
+vblankwait:
+  BIT PPUSTATUS
+  BPL vblankwait
 
-clear_memory:
-  lda #$00
-  sta $0000, x
-  sta $0100, x
-  sta $0200, x
-  sta $0300, x
-  sta $0400, x
-  sta $0500, x
-  sta $0600, x
-  sta $0700, x
-  inx
-  bne clear_memory
+	LDX #$00
+	LDA #$ff
+clear_oam:
+	STA $0200,X ; set sprite y-positions off the screen
+	INX
+	INX
+	INX
+	INX
+	BNE clear_oam
 
-;; second wait for vblank, PPU is ready after this
 vblankwait2:
-  bit $2002
-  bpl vblankwait2
+	BIT PPUSTATUS
+	BPL vblankwait2
+
+	; initialize zero-page values
+	LDA #$80
+	STA player_x
+	LDA #$a0
+	STA player_y
+
+  JMP main
 
 main:
 load_palettes:
@@ -78,16 +146,6 @@ load_palettes:
   inx
   cpx #$20
   bne @loop
-
-LoadSprites:
-  LDX #$00
-LoadSpritesLoop:
-  LDA sprites, x 
-  STA $0200, x 
-  INX 
-  CPX #$60
-  BNE LoadSpritesLoop
-
 
 LoadBackground:
   LDA $2002           ; read PPU status to reset the high/low latch
@@ -148,23 +206,125 @@ enable_rendering:
 forever:
   jmp forever
 
-nmi:
+
+.proc update_player
+  PHP
+  PHA
+  TXA
+  PHA
+  TYA
+  PHA
+
+  LDA player_x
+  CMP #$e0
+  BCC not_at_right_edge
+  ; if BCC is not taken, we are greater than $e0
   LDA #$00
-  STA $2003    ; set the low byte (00) of the RAM address
-  LDA #$02
-  STA $4014    ; set the high byte (02) of the RAM address, start the transfer
-  LDA #$00
-  STA $2005
-  STA $2005
+  STA player_dir    ; start moving left
+  JMP direction_set ; we already chose a direction,
+                    ; so we can skip the left side check
+not_at_right_edge:
+  LDA player_x
+  CMP #$10
+  BCS direction_set
+  ; if BCS not taken, we are less than $10
+  LDA #$01
+  STA player_dir   ; start moving right
+direction_set:
+  ; now, actually update player_x
+  LDA player_dir
+  CMP #$01
+  BEQ move_right
+  ; if player_dir minus $01 is not zero,
+  ; that means player_dir was $00 and
+  ; we need to move left
+  DEC player_x
+  JMP exit_subroutine
+move_right:
+  INC player_x
+exit_subroutine:
+  ; all done, clean up and return
+  PLA
+  TAY
+  PLA
+  TAX
+  PLA
+  PLP
+  RTS
+.endproc
 
-;This is the PPU clean up section, so rendering the next frame starts properly.
-  LDA #%10010000
-  STA $2000    ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
-  LDA #%00011110
-  STA $2001    ; enable sprites, enable background, no clipping on left side
+.proc draw_player
+  ; save registers
+  PHP
+  PHA
+  TXA
+  PHA
+  TYA
+  PHA
 
-  RTI           ; return from interrupt
+  ; write player ship tile numbers
+  LDA #$11
+  STA $0201
+  LDA #$12
+  STA $0205
+  LDA #$21
+  STA $0209
+  LDA #$22
+  STA $020d
 
+  ; write player ship tile attributes
+  ; use palette 0
+  LDA #$01
+  STA $0202
+  STA $0206
+  STA $020a
+  STA $020e
+
+  ; store tile locations
+  ; top left tile:
+  LDA player_y
+  STA $0200
+  LDA player_x
+  STA $0203
+
+  ; top right tile (x + 8):
+  LDA player_y
+  STA $0204
+  LDA player_x
+  CLC
+  ADC #$08
+  STA $0207
+
+  ; bottom left tile (y + 8):
+  LDA player_y
+  CLC
+  ADC #$08
+  STA $0208
+  LDA player_x
+  STA $020b
+
+  ; bottom right tile (x + 8, y + 8)
+  LDA player_y
+  CLC
+  ADC #$08
+  STA $020c
+  LDA player_x
+  CLC
+  ADC #$08
+  STA $020f
+
+
+
+
+  ; restore registers and return
+  PLA
+  TAY
+  PLA
+  TAX
+  PLA
+  PLP
+  RTS
+.endproc
 
 palettes:
   ; Background Palette
@@ -174,13 +334,10 @@ palettes:
   .byte $0f, $15, $15, $15
 
   ; Sprite Palette
-  .byte $0f,$00,$10,$30
-  .byte $0f,$01,$21,$31
-  .byte $0f,$06,$16,$26
-  .byte $0f,$09,$19,$29
-
-
-
+  .byte $0f, $00, $10, $30
+  .byte $0f, $01, $21, $31
+  .byte $0f, $06, $16, $26
+  .byte $0f, $09, $19, $29
   
 sprites: ; pos_Y, Tile, attr, pos_X
 .byte $55, $11, $1, $14 ; idle
