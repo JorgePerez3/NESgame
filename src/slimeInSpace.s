@@ -1,10 +1,23 @@
 PPUCTRL   = $2000
 PPUMASK   = $2001
 PPUSTATUS = $2002
+PPUSCROLL = $2005
 PPUADDR   = $2006
 PPUDATA   = $2007
 OAMADDR   = $2003
 OAMDMA    = $4014
+
+CONTROLLER1 = $4016
+CONTROLLER2 = $4017
+
+BTN_RIGHT   = %00000001
+BTN_LEFT    = %00000010
+BTN_DOWN    = %00000100
+BTN_UP      = %00001000
+BTN_START   = %00010000
+BTN_SELECT  = %00100000
+BTN_B       = %01000000
+BTN_A       = %10000000
 
 
 .segment "HEADER"
@@ -53,7 +66,7 @@ STA player_y
   ; to latch button states
   LDA #$01
   STA CONTROLLER1
-  LDA #$00
+  LDA #$00 
   STA CONTROLLER1
 
   LDA #%00000001
@@ -82,8 +95,17 @@ nmi:
   STA OAMDMA
   LDA #$00
 
-; update tiles *after* DMA transfer
+JSR read_controller1
 JSR update_player
+
+  delay_loop:
+    LDX #$FF  
+
+    delay_inner_loop:
+      DEX         
+      BNE delay_inner_loop 
+
+
 JSR draw_player
 
 STA $2005
@@ -146,6 +168,16 @@ load_palettes:
   inx
   cpx #$20
   bne @loop
+
+; LoadSprites:
+;   LDX #$00
+; LoadSpritesLoop:
+;   LDA sprites, x 
+;   STA $0200, x 
+;   INX 
+;   CPX #$10
+;   BNE LoadSpritesLoop
+
 
 LoadBackground:
   LDA $2002           ; read PPU status to reset the high/low latch
@@ -215,34 +247,38 @@ forever:
   TYA
   PHA
 
-  LDA player_x
-  CMP #$e0
-  BCC not_at_right_edge
-  ; if BCC is not taken, we are greater than $e0
-  LDA #$00
-  STA player_dir    ; start moving left
-  JMP direction_set ; we already chose a direction,
-                    ; so we can skip the left side check
-not_at_right_edge:
-  LDA player_x
-  CMP #$10
-  BCS direction_set
-  ; if BCS not taken, we are less than $10
-  LDA #$01
-  STA player_dir   ; start moving right
-direction_set:
-  ; now, actually update player_x
-  LDA player_dir
-  CMP #$01
-  BEQ move_right
-  ; if player_dir minus $01 is not zero,
-  ; that means player_dir was $00 and
-  ; we need to move left
-  DEC player_x
-  JMP exit_subroutine
-move_right:
+
+
+  LDA pad1 ; load button presses
+  AND #BTN_LEFT ; filter out all but left 
+  BEQ check_right ; if result equals 0, left not pressed.
+  DEC player_x ; if it doesn't branch, move player left
+
+check_right:
+  LDA pad1
+  AND #BTN_RIGHT
+  BEQ check_up
   INC player_x
-exit_subroutine:
+check_up:
+  LDA pad1
+  AND #BTN_UP
+  BEQ check_down
+  DEC player_y
+check_down:
+  LDA pad1
+  AND #BTN_DOWN
+  BEQ done_checking
+
+
+
+ ; check if player pressed left, decrement pos_x
+
+ ; check if the player pressed right, increment pos_x
+
+ ; check if player pressed up, decrement pos_y
+
+
+done_checking:
   ; all done, clean up and return
   PLA
   TAY
@@ -262,68 +298,131 @@ exit_subroutine:
   TYA
   PHA
 
-  ; write player ship tile numbers
-  LDA #$11
-  STA $0201
-  LDA #$12
-  STA $0205
-  LDA #$21
-  STA $0209
-  LDA #$22
-  STA $020d
+  state_loop:
+    LDA $00
+    CMP #$01
 
-  ; write player ship tile attributes
-  ; use palette 0
-  LDA #$01
-  STA $0202
-  STA $0206
-  STA $020a
-  STA $020e
+    BEQ sprite1
+    JMP sprite2
 
-  ; store tile locations
-  ; top left tile:
-  LDA player_y
-  STA $0200
-  LDA player_x
-  STA $0203
+  sprite1:
+    ; write player ship tile numbers
+    LDA #$11
+    STA $0201
+    LDA #$12
+    STA $0205
+    LDA #$21
+    STA $0209
+    LDA #$22
+    STA $020d
 
-  ; top right tile (x + 8):
-  LDA player_y
-  STA $0204
-  LDA player_x
-  CLC
-  ADC #$08
-  STA $0207
+    ; write player ship tile attributes
+    ; use palette 0
+    LDA #$01
+    STA $0202
+    STA $0206
+    STA $020a
+    STA $020e
 
-  ; bottom left tile (y + 8):
-  LDA player_y
-  CLC
-  ADC #$08
-  STA $0208
-  LDA player_x
-  STA $020b
+    ; store tile locations
+    ; top left tile:
+    LDA player_y
+    STA $0200
+    LDA player_x
+    STA $0203
 
-  ; bottom right tile (x + 8, y + 8)
-  LDA player_y
-  CLC
-  ADC #$08
-  STA $020c
-  LDA player_x
-  CLC
-  ADC #$08
-  STA $020f
+    ; top right tile (x + 8):
+    LDA player_y
+    STA $0204
+    LDA player_x
+    CLC
+    ADC #$08
+    STA $0207
 
+    ; bottom left tile (y + 8):
+    LDA player_y
+    CLC
+    ADC #$08
+    STA $0208
+    LDA player_x
+    STA $020b
 
+    ; bottom right tile (x + 8, y + 8)
+    LDA player_y
+    CLC
+    ADC #$08
+    STA $020c
+    LDA player_x
+    CLC
+    ADC #$08
+    STA $020f
 
+    DEC $00
+    JMP exit_loop
+  sprite2:
+    ; write player ship tile numbers
+    LDA #$13
+    STA $0201
+    LDA #$14
+    STA $0205
+    LDA #$23
+    STA $0209
+    LDA #$24
+    STA $020d
 
-  ; restore registers and return
-  PLA
-  TAY
-  PLA
-  TAX
-  PLA
-  PLP
-  RTS
+    ; write player ship tile attributes
+    ; use palette 0
+    LDA #$01
+    STA $0202
+    STA $0206
+    STA $020a
+    STA $020e
+
+    ; store tile locations
+    ; top left tile:
+    LDA player_y
+    STA $0200
+    LDA player_x
+    STA $0203
+
+    ; top right tile (x + 8):
+    LDA player_y
+    STA $0204
+    LDA player_x
+    CLC
+    ADC #$08
+    STA $0207
+
+    ; bottom left tile (y + 8):
+    LDA player_y
+    CLC
+    ADC #$08
+    STA $0208
+    LDA player_x
+    STA $020b
+
+    ; bottom right tile (x + 8, y + 8)
+    LDA player_y
+    CLC
+    ADC #$08
+    STA $020c
+    LDA player_x
+    CLC
+    ADC #$08
+    STA $020f
+    INC $00
+    JMP exit_loop
+
+  exit_loop:
+  
+      ; restore registers and return
+    PLA
+    TAY
+    PLA
+    TAX
+    PLA
+    PLP
+    RTS
 .endproc
 
 palettes:
@@ -360,15 +459,15 @@ sprites: ; pos_Y, Tile, attr, pos_X
 .byte $5d, $27, $41, $4c
 .byte $5d, $28, $41, $44
 
-.byte $45, $17, $01, $54 ; looking right
-.byte $45, $18, $01, $5c
-.byte $4d, $27, $01, $54
-.byte $4d, $28, $01, $5c
-
 .byte $45, $31, $01, $44 ; dead
 .byte $45, $32, $01, $4c
 .byte $4d, $41, $01, $44
 .byte $4d, $42, $01, $4c
+
+.byte $45, $17, $01, $54 ; looking right
+.byte $45, $18, $01, $5c
+.byte $4d, $27, $01, $54
+.byte $4d, $28, $01, $5c
 
 background:
 	.byte $16,$26,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
