@@ -19,6 +19,8 @@ BTN_SELECT  = %00100000
 BTN_B       = %01000000
 BTN_A       = %10000000
 
+idle = $00
+idle2 = $00
 
 .segment "HEADER"
 .byte $4e, $45, $53, $1a ; Magic string that always begins an iNES header
@@ -55,7 +57,6 @@ STA player_x
 LDA #$a0
 STA player_y
 
-
 .proc read_controller1
   PHA
   TXA
@@ -88,6 +89,13 @@ get_buttons:
 .endproc
 
 
+; Initialize variables
+    LDA #$80
+    STA player_x
+    LDA #$a0
+    STA player_y
+  
+
 nmi:
   LDA #$00
   STA OAMADDR
@@ -97,15 +105,6 @@ nmi:
 
 JSR read_controller1
 JSR update_player
-
-  delay_loop:
-    LDX #$FF  
-
-    delay_inner_loop:
-      DEX         
-      BNE delay_inner_loop 
-
-
 JSR draw_player
 
 STA $2005
@@ -169,16 +168,6 @@ load_palettes:
   cpx #$20
   bne @loop
 
-; LoadSprites:
-;   LDX #$00
-; LoadSpritesLoop:
-;   LDA sprites, x 
-;   STA $0200, x 
-;   INX 
-;   CPX #$10
-;   BNE LoadSpritesLoop
-
-
 LoadBackground:
   LDA $2002           ; read PPU status to reset the high/low latch
   LDA #$20
@@ -238,7 +227,6 @@ enable_rendering:
 forever:
   jmp forever
 
-
 .proc update_player
   PHP
   PHA
@@ -268,7 +256,7 @@ check_down:
   LDA pad1
   AND #BTN_DOWN
   BEQ done_checking
-
+  INC player_y
 
 
  ; check if player pressed left, decrement pos_x
@@ -298,9 +286,9 @@ done_checking:
   TYA
   PHA
 
-  state_loop:
-    LDA $00
-    CMP #$01
+  state_loop1:
+    LDA idle
+    CMP #$3c
 
     BEQ sprite1
     JMP sprite2
@@ -357,7 +345,11 @@ done_checking:
     ADC #$08
     STA $020f
 
-    DEC $00
+    state_loop2:
+      LDA idle2
+      CMP #$3c
+      BEQ exit
+      INC idle2
     JMP exit_loop
   sprite2:
     ; write player ship tile numbers
@@ -410,9 +402,13 @@ done_checking:
     CLC
     ADC #$08
     STA $020f
-    INC $00
-    JMP exit_loop
 
+    INC idle
+    JMP exit_loop
+  exit:
+    LDA #$00
+    STA idle
+    STA idle
   exit_loop:
   
       ; restore registers and return
