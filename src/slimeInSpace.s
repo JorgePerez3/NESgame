@@ -1,15 +1,9 @@
-PPUCTRL   = $2000
-PPUMASK   = $2001
-PPUSTATUS = $2002
-PPUSCROLL = $2005
-PPUADDR   = $2006
-PPUDATA   = $2007
-OAMADDR   = $2003
-OAMDMA    = $4014
-
-CONTROLLER1 = $4016
-CONTROLLER2 = $4017
-
+PPUCTRL     = $2000
+PPUMASK     = $2001
+PPUSTATUS   = $2002
+PPUDATA     = $2007
+OAMADDR     = $2003
+OAMDMA      = $4014
 BTN_RIGHT   = %00000001
 BTN_LEFT    = %00000010
 BTN_DOWN    = %00000100
@@ -19,82 +13,85 @@ BTN_SELECT  = %00100000
 BTN_B       = %01000000
 BTN_A       = %10000000
 
-idle = $00
-idle2 = $00
+controller1 = $4016
+controller2 = $4017
+tmp         = $07
+Pressing = $06 
+
+NumberOfSprites = $09 
+TotalSprites = 9   
+
+SpriteRAM = $0200 
+CollisionRAM = $0700
+
+PlayerRam1 = $0201
+PlayerRam2 = $0205
+PlayerRam3 = $0209
+PlayerRam4 = $020d
+
+IsWalking = $0F 
+WalkCycleFrame = $10
+WalkCycleCounter = $11
 
 .segment "HEADER"
-.byte $4e, $45, $53, $1a ; Magic string that always begins an iNES header
-.byte $02        ; Number of 16KB PRG-ROM banks
-.byte $01        ; Number of 8KB CHR-ROM banks
-.byte %00000000  ; Horizontal mirroring, no save RAM, no mapper
-.byte %00000000  ; No special-case flags set, no mapper
-.byte $00        ; No PRG-RAM present
-.byte $00        ; NTSC format
-      ; mapper 0, vertical mirroring
+.byte $4e, $45, $53, $1a ; String that begins an iNES header
+.byte $02         ; Number of 16KB PRG-ROM banks
+.byte $01         ; Number of 8KB CHR-ROM banks
+.byte %00000000   ; Horizontal mirroring, no save RAM, no mapper
+.byte %00000000   ; No special-case flags set, no mapper
+.byte $00         ; No PRG-RAM present
+.byte $00         ; NTSC format
+                  ; mapper 0, vertical mirroring
 
 .segment "ZEROPAGE"
-  player_x: .res 1
-  player_y: .res 1
+  ; player_x: .res 1
+  ; player_y: .res 1
+  PlayerXPos: .res 1
+  PlayerYPos: .res 1
   player_dir: .res 1
   pad1: .res 1
   
 .segment "VECTORS"
-  ;; When an NMI happens (once per frame if enabled) the label nmi:
   .addr nmi
-  ;; When the processor first turns on or is reset, it will jump to the label reset:
   .addr reset
-  ;; External interrupt IRQ (unused)
   .addr 0
 
-; "nes" linker config requires a STARTUP section, even if it's empty
 .segment "STARTUP"
 
-; Main code segment for the program
 .segment "CODE"
 
-LDA #$80
-STA player_x
-LDA #$a0
-STA player_y
 
-.proc read_controller1
-  PHA
-  TXA
-  PHA
-  PHP
+; .proc read_controller1
+;   PHA
+;   TXA
+;   PHA
+;   PHP
 
-  ; write a 1, then a 0, to CONTROLLER1
-  ; to latch button states
-  LDA #$01
-  STA CONTROLLER1
-  LDA #$00 
-  STA CONTROLLER1
+;   ; write a 1, then a 0, to CONTROLLER1
+;   ; to latch button states
+;   LDA #$01
+;   STA controller1
+;   LDA #$00 
+;   STA controller1
 
-  LDA #%00000001
-  STA pad1
+;   LDA #%00000001
+;   STA pad1
 
-get_buttons:
-  LDA CONTROLLER1 ; Read next button's state
-  LSR A           ; Shift button state right, into carry flag
-  ROL pad1        ; Rotate button state from carry flag
-                  ; onto right side of pad1
-                  ; and leftmost 0 of pad1 into carry flag
-  BCC get_buttons ; Continue until original "1" is in carry flag
+; get_buttons:
+;   LDA controller1 ; Read next button's state
+;   LSR A           ; Shift button state right, into carry flag
+;   ROL pad1        ; Rotate button state from carry flag
+;                   ; onto right side of pad1
+;                   ; and leftmost 0 of pad1 into carry flag
+;   BCC get_buttons ; Continue until original "1" is in carry flag
 
-  PLP
-  PLA
-  TAX
-  PLA
-  RTS
-.endproc
+;   PLP
+;   PLA
+;   TAX
+;   PLA
+;   RTS
+; .endproc
 
-
-; Initialize variables
-    LDA #$80
-    STA player_x
-    LDA #$a0
-    STA player_y
-  
 
 nmi:
   LDA #$00
@@ -103,8 +100,8 @@ nmi:
   STA OAMDMA
   LDA #$00
 
-JSR read_controller1
-JSR update_player
+JSR CheckController 
+JSR UpdateSprite
 JSR draw_player
 
 STA $2005
@@ -117,10 +114,8 @@ STA $2001    ; enable sprites, enable background, no clipping on left side
 
 RTI           ; return from interrupt
 
-; RTI
-
 reset:
-    SEI
+  SEI
   CLD
   LDX #$00
   STX PPUCTRL
@@ -129,31 +124,60 @@ reset:
 vblankwait:
   BIT PPUSTATUS
   BPL vblankwait
-
 	LDX #$00
 	LDA #$ff
-clear_oam:
+
+ClearRAM:
+	LDA #$00
+	STA $0000, x
+	STA $0100, x
+	STA $0200, x
+	STA $0300, x
+	STA $0400, x
+	STA $0500, x
+	STA $0600, x
+	STA $0700, x
+	LDA #$FE
+	STA SpriteRAM, x                ; Moving sprites off the screen 
+	INX
+	BNE ClearRAM
+
+ClearOam:
 	STA $0200,X ; set sprite y-positions off the screen
 	INX
 	INX
 	INX
 	INX
-	BNE clear_oam
+	BNE ClearOam
 
 vblankwait2:
 	BIT PPUSTATUS
 	BPL vblankwait2
 
-	; initialize zero-page values
+  ; initialize zero-page values
 	LDA #$80
-	STA player_x
+	STA PlayerXPos
 	LDA #$a0
-	STA player_y
+	STA PlayerYPos
 
   JMP main
 
 main:
-load_palettes:
+
+LoadSprites:
+  LDA #TotalSprites
+  ASL 
+  ASL 
+  STA NumberOfSprites
+  LDX #$00
+LoadSpritesLoop:
+  LDA sprites, x 
+  STA SpriteRAM, x 
+  INX
+  CPX NumberOfSprites
+  BNE LoadSpritesLoop
+
+LoadPalettes:
   lda $2002
   lda #$3f
   sta $2006
@@ -169,20 +193,20 @@ load_palettes:
   bne @loop
 
 LoadBackground:
-  LDA $2002           ; read PPU status to reset the high/low latch
+  LDA $2002               ; read PPU status to reset the high/low latch
   LDA #$20
-  STA $2006           ; write the high byte ($20) of $2000 address
+  STA $2006               ; write the high byte ($20) of $2000 address
   LDA #$00
-  STA $2006           ; write the low byte ($00) of $2000 address
-  LDX #$00            ; start out at 0
+  STA $2006               ; write the low byte ($00) of $2000 address
+  LDX #$00                ; start out at 0
 
 LoadBackgroundLoop:
-  LDA background, x   ; load data from address (background + the value in x)
-  STA $2007           ; write to PPU
-  INX                 ; X++
-  BNE LoadBackgroundLoop ; Branch to LoadBackgroundLoop if compare was Not Equal to zero
+  LDA background, x       ; load data from address (background + the value in x)
+  STA $2007               ; write to PPU
+  INX                     ; X++
+  BNE LoadBackgroundLoop  ; Branch to LoadBackgroundLoop if compare was Not Equal to zero
                           ; if compare was equal to 0, keep going down
-  LDX #$00            ; start out at 0
+  LDX #$00                ; start out at 0
 
 LoadBackgroundLoop2:
   LDA background+256, x
@@ -204,19 +228,19 @@ LoadBackgroundLoop4:
   INX
   BNE LoadBackgroundLoop4
 
-LoadAttribute:
-  LDA $2002
-  LDA #$23
-  STA $2006
-  LDA #$C2
-  STA $2006
-  LDA #$00
-LoadAttributeLoop:
-  LDA attributes, x
-  STA $2007
-  INX
-  CPX #$08
-  BNE LoadAttributeLoop
+; LoadAttribute:
+;   LDA $2002
+;   LDA #$23
+;   STA $2006
+;   LDA #$C2
+;   STA $2006
+;   LDA #$00
+; LoadAttributeLoop:
+;   LDA attributes, x
+;   STA $2007
+;   INX
+;   CPX #$08
+;   BNE LoadAttributeLoop
 
 enable_rendering:
   lda #%10000000	; Enable NMI
@@ -227,55 +251,167 @@ enable_rendering:
 forever:
   jmp forever
 
-.proc update_player
-  PHP
-  PHA
-  TXA
-  PHA
-  TYA
-  PHA
 
+.proc UpdateSprite
+  LDA #<SpriteRAM
+  STA $2003
+  LDA #>SpriteRAM
+  STA $4014
 
-
-  LDA pad1 ; load button presses
-  AND #BTN_LEFT ; filter out all but left 
-  BEQ check_right ; if result equals 0, left not pressed.
-  DEC player_x ; if it doesn't branch, move player left
-
-check_right:
-  LDA pad1
-  AND #BTN_RIGHT
-  BEQ check_up
-  INC player_x
-check_up:
-  LDA pad1
-  AND #BTN_UP
-  BEQ check_down
-  DEC player_y
-check_down:
-  LDA pad1
-  AND #BTN_DOWN
-  BEQ done_checking
-  INC player_y
-
-
- ; check if player pressed left, decrement pos_x
-
- ; check if the player pressed right, increment pos_x
-
- ; check if player pressed up, decrement pos_y
-
-
-done_checking:
-  ; all done, clean up and return
-  PLA
-  TAY
-  PLA
-  TAX
-  PLA
-  PLP
   RTS
 .endproc
+
+.proc CheckController
+	LDA #$01 
+	STA $4016             ; Strobing thew controller 
+	LDX #$00
+	STX $4016             ; Latching controller state 
+ConLoop:
+	LDA $4016  
+	LSR 
+	ROR Pressing          ; RLDUsSBA 
+	INX
+	CPX #$08
+	BNE ConLoop
+CheckRight:
+	LDA #%10000000
+	AND Pressing
+	BEQ CheckLeft
+	JSR MovePlayerRight 
+CheckLeft:
+	LDA #%01000000
+	AND Pressing 
+	BEQ CheckDown
+	JSR MovePlayerLeft
+CheckDown:
+	LDA #%00100000
+	AND Pressing
+	BEQ CheckUp
+	JSR MovePlayerDown
+CheckUp:
+	LDA #%00010000
+	AND Pressing
+	BEQ EndController
+	JSR MovePlayerUp
+EndController:
+	RTS 
+
+.endproc
+
+MovePlayerRight:
+LookRight:
+  LDA #$17
+  STA PlayerRam1
+    LDA #18
+  STA PlayerRam2
+    LDA #$27
+  STA PlayerRam3
+    LDA #$28
+  STA PlayerRam4
+  LDA #%00000001
+  STA $0202
+  STA $0206
+  STA $020a
+  STA $020e
+
+  INC PlayerXPos
+  LDX PlayerXPos
+  LDY PlayerYPos
+  JSR CheckCollision
+  BEQ RightCollision
+  DEC PlayerXPos
+RightCollision:
+
+  RTS
+
+
+MovePlayerLeft:
+
+LookLeft:
+  LDA #$17
+  STA PlayerRam2
+  LDA #$18
+  STA PlayerRam1
+  LDA #$27
+  STA PlayerRam4
+  LDA #$28
+  STA PlayerRam3
+
+  LDA #%01000001
+  STA $0202
+  STA $0206
+  STA $020a
+  STA $020e
+
+  DEC PlayerXPos
+  LDX PlayerXPos
+  LDY PlayerYPos
+  JSR CheckCollision
+  BEQ LeftCollision
+  INC PlayerXPos
+LeftCollision:
+
+  RTS
+
+
+MovePlayerDown:
+
+  INC PlayerYPos
+  LDX PlayerXPos
+  LDY PlayerYPos
+  JSR CheckCollision
+  BEQ DownCollision
+  DEC PlayerYPos
+
+DownCollision:
+
+  RTS
+
+
+MovePlayerUp:
+
+
+
+  DEC PlayerYPos
+  LDX PlayerXPos
+  LDY PlayerYPos
+  JSR CheckCollision
+  BEQ UpCollision
+  INC PlayerYPos
+UpCollision:
+
+  RTS
+
+; ; X/64 + (Y/8 * 4)
+.proc CheckCollision
+  TXA
+  LSR
+  LSR
+  LSR
+  LSR
+  LSR
+  LSR
+  STA tmp
+  TYA 
+  LSR
+  LSR
+  LSR
+  ASL
+  ASL 
+  CLC
+  ADC tmp
+  TAY
+  TXA 
+  LSR
+  LSR
+  LSR
+  AND #%0111
+  TAX 
+  LDA ColissionMap, y 
+  AND bitMask, x 
+  RTS
+
+.endproc 
 
 .proc draw_player
   ; save registers
@@ -286,139 +422,64 @@ done_checking:
   TYA
   PHA
 
-  state_loop1:
-    LDA idle
-    CMP #$3c
 
-    BEQ sprite1
-    JMP sprite2
+  ; ; write player tile numbers
+  LDA #$11
+  STA PlayerRam1
+  LDA #$12
+  STA PlayerRam2
+  LDA #$21
+  STA PlayerRam3
+  LDA #$22
+  STA PlayerRam4
 
-  sprite1:
-    ; write player ship tile numbers
-    LDA #$11
-    STA $0201
-    LDA #$12
-    STA $0205
-    LDA #$21
-    STA $0209
-    LDA #$22
-    STA $020d
+  LDA #%00000001
+  STA $0202
+  STA $0206
+  STA $020a
+  STA $020e
 
-    ; write player ship tile attributes
-    ; use palette 0
-    LDA #$01
-    STA $0202
-    STA $0206
-    STA $020a
-    STA $020e
+  ; store tile locations
+  ; top left tile:
+  LDA PlayerYPos
+  STA $0200
+  LDA PlayerXPos
+  STA $0203
 
-    ; store tile locations
-    ; top left tile:
-    LDA player_y
-    STA $0200
-    LDA player_x
-    STA $0203
+  ; top right tile (x + 8):
+  LDA PlayerYPos
+  STA $0204
+  LDA PlayerXPos
+  CLC
+  ADC #$08
+  STA $0207
 
-    ; top right tile (x + 8):
-    LDA player_y
-    STA $0204
-    LDA player_x
-    CLC
-    ADC #$08
-    STA $0207
+  ; bottom left tile (y + 8):
+  LDA PlayerYPos
+  CLC
+  ADC #$08
+  STA $0208
+  LDA PlayerXPos
+  STA $020b
 
-    ; bottom left tile (y + 8):
-    LDA player_y
-    CLC
-    ADC #$08
-    STA $0208
-    LDA player_x
-    STA $020b
+  ; bottom right tile (x + 8, y + 8)
+  LDA PlayerYPos
+  CLC
+  ADC #$08
+  STA $020c
+  LDA PlayerXPos
+  CLC
+  ADC #$08
+  STA $020f
 
-    ; bottom right tile (x + 8, y + 8)
-    LDA player_y
-    CLC
-    ADC #$08
-    STA $020c
-    LDA player_x
-    CLC
-    ADC #$08
-    STA $020f
-
-    state_loop2:
-      LDA idle2
-      CMP #$3c
-      BEQ exit
-      INC idle2
-    JMP exit_loop
-  sprite2:
-    ; write player ship tile numbers
-    LDA #$13
-    STA $0201
-    LDA #$14
-    STA $0205
-    LDA #$23
-    STA $0209
-    LDA #$24
-    STA $020d
-
-    ; write player ship tile attributes
-    ; use palette 0
-    LDA #$01
-    STA $0202
-    STA $0206
-    STA $020a
-    STA $020e
-
-    ; store tile locations
-    ; top left tile:
-    LDA player_y
-    STA $0200
-    LDA player_x
-    STA $0203
-
-    ; top right tile (x + 8):
-    LDA player_y
-    STA $0204
-    LDA player_x
-    CLC
-    ADC #$08
-    STA $0207
-
-    ; bottom left tile (y + 8):
-    LDA player_y
-    CLC
-    ADC #$08
-    STA $0208
-    LDA player_x
-    STA $020b
-
-    ; bottom right tile (x + 8, y + 8)
-    LDA player_y
-    CLC
-    ADC #$08
-    STA $020c
-    LDA player_x
-    CLC
-    ADC #$08
-    STA $020f
-
-    INC idle
-    JMP exit_loop
-  exit:
-    LDA #$00
-    STA idle
-    STA idle
-  exit_loop:
-  
-      ; restore registers and return
-    PLA
-    TAY
-    PLA
-    TAX
-    PLA
-    PLP
-    RTS
+    ; restore registers and return
+  PLA
+  TAY
+  PLA
+  TAX
+  PLA
+  PLP
+  RTS
 .endproc
 
 palettes:
@@ -435,35 +496,78 @@ palettes:
   .byte $0f, $09, $19, $29
   
 sprites: ; pos_Y, Tile, attr, pos_X
-.byte $55, $11, $1, $14 ; idle
-.byte $55, $12, $1, $1c
-.byte $5d, $21, $1, $14
-.byte $5d, $22, $1, $1c
 
-.byte $55, $13, $01, $24 ; idle movement
-.byte $55, $14, $01, $2c
-.byte $5d, $23, $01, $24
-.byte $5d, $24, $01, $2c
+  .byte $80, $11, $1, $80 ; idle sprite 
+  .byte $80, $12, $1, $88
+  .byte $88, $21, $1, $80
+  .byte $88, $22, $1, $88
 
-.byte $55, $15, $01, $34 ; jump 
-.byte $55, $16, $01, $3c
-.byte $5d, $25, $01, $34
-.byte $5d, $26, $01, $3c
 
-.byte $55, $17, $41, $4c ; looking left
-.byte $55, $18, $41, $44
-.byte $5d, $27, $41, $4c
-.byte $5d, $28, $41, $44
+  ; .byte $55, $15, $01, $34 ; jump 
+  ; .byte $55, $16, $01, $3c
+  ; .byte $5d, $25, $01, $34
+  ; .byte $5d, $26, $01, $3c
 
-.byte $45, $31, $01, $44 ; dead
-.byte $45, $32, $01, $4c
-.byte $4d, $41, $01, $44
-.byte $4d, $42, $01, $4c
+  ; .byte $55, $17, $41, $4c ; looking left
+  ; .byte $55, $18, $41, $44
+  ; .byte $5d, $27, $41, $4c
+  ; .byte $5d, $28, $41, $44
 
-.byte $45, $17, $01, $54 ; looking right
-.byte $45, $18, $01, $5c
-.byte $4d, $27, $01, $54
-.byte $4d, $28, $01, $5c
+  ; .byte $45, $31, $01, $44 ; dead
+  ; .byte $45, $32, $01, $4c
+  ; .byte $4d, $41, $01, $44
+  ; .byte $4d, $42, $01, $4c
+
+  ; .byte $45, $17, $01, $54 ; looking right
+  ; .byte $45, $18, $01, $5c
+  ; .byte $4d, $27, $01, $54
+  ; .byte $4d, $28, $01, $5c
+
+ColissionMap:
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00001111, %11111111, %11111111, %00000000
+  .byte %00001111, %11111111, %11111111, %00000000
+  .byte %00001111, %11111111, %11111111, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+  .byte %11111111, %11111111, %11111111, %11111111
+
+
+bitMask:
+  .byte %10000000
+  .byte %01000000
+  .byte %00100000
+  .byte %00010000
+  .byte %00001000
+  .byte %00000100
+  .byte %00000010
+  .byte %00000001
 
 background:
 	.byte $16,$26,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
