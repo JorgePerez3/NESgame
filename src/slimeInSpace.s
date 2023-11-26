@@ -1,37 +1,55 @@
-PPUCTRL     = $2000
-PPUMASK     = $2001
-PPUSTATUS   = $2002
-PPUDATA     = $2007
-OAMADDR     = $2003
-OAMDMA      = $4014
-BTN_RIGHT   = %00000001
-BTN_LEFT    = %00000010
-BTN_DOWN    = %00000100
-BTN_UP      = %00001000
-BTN_START   = %00010000
-BTN_SELECT  = %00100000
-BTN_B       = %01000000
-BTN_A       = %10000000
+PPUCTRL               = $2000
+PPUMASK               = $2001
+PPUSTATUS             = $2002
+PPUDATA               = $2007
+OAMADDR               = $2003
+OAMDMA                = $4014
+BTN_RIGHT             = %00000001
+BTN_LEFT              = %00000010
+BTN_DOWN              = %00000100
+BTN_UP                = %00001000
+BTN_START             = %00010000
+BTN_SELECT            = %00100000
+BTN_B                 = %01000000
+BTN_A                 = %10000000
 
-controller1 = $4016
-controller2 = $4017
-tmp         = $07
-Pressing = $06 
+controller1           = $4016
+controller2           = $4017
+tmp                   = $07
+Pressing              = $06 
 
-NumberOfSprites = $09 
-TotalSprites = 9   
+NumberOfSprites       = $09 
+TotalSprites          = 9   
 
-SpriteRAM = $0200 
-CollisionRAM = $0700
+SpriteRAM             = $0200 
+CollisionRAM          = $0700
 
-PlayerRam1 = $0201
-PlayerRam2 = $0205
-PlayerRam3 = $0209
-PlayerRam4 = $020d
+PlayerRam1            = $0201
+PlayerRam2            = $0205
+PlayerRam3            = $0209
+PlayerRam4            = $020d
+delay                 = $0f
+DelayTime             = 60
+IsWalking             = $12 
+WalkCycleFrame        = $10
+WalkCycleCounter      = $11
+WalkCycleTimePerFrame = 60
 
-IsWalking = $0F 
-WalkCycleFrame = $10
-WalkCycleCounter = $11
+idleState             = $3d
+idleTimer             = $3e
+
+motionState           = $3a 
+
+.enum IdleState
+  Still = 0
+  Breathe = 1
+.endenum
+
+.enum MotionState
+  Still = 0
+  Walk = 1
+  Airborne = 2
+.endenum
 
 .segment "HEADER"
 .byte $4e, $45, $53, $1a ; String that begins an iNES header
@@ -44,8 +62,6 @@ WalkCycleCounter = $11
                   ; mapper 0, vertical mirroring
 
 .segment "ZEROPAGE"
-  ; player_x: .res 1
-  ; player_y: .res 1
   PlayerXPos: .res 1
   PlayerYPos: .res 1
   player_dir: .res 1
@@ -61,56 +77,26 @@ WalkCycleCounter = $11
 .segment "CODE"
 
 
-; .proc read_controller1
-;   PHA
-;   TXA
-;   PHA
-;   PHP
-
-;   ; write a 1, then a 0, to CONTROLLER1
-;   ; to latch button states
-;   LDA #$01
-;   STA controller1
-;   LDA #$00 
-;   STA controller1
-
-;   LDA #%00000001
-;   STA pad1
-
-; get_buttons:
-;   LDA controller1 ; Read next button's state
-;   LSR A           ; Shift button state right, into carry flag
-;   ROL pad1        ; Rotate button state from carry flag
-;                   ; onto right side of pad1
-;                   ; and leftmost 0 of pad1 into carry flag
-;   BCC get_buttons ; Continue until original "1" is in carry flag
-
-;   PLP
-;   PLA
-;   TAX
-;   PLA
-;   RTS
-; .endproc
-
-
 nmi:
   LDA #$00
   STA OAMADDR
   LDA #$02
   STA OAMDMA
   LDA #$00
+  STA $2005
+  ;This is the PPU clean up section, so rendering the next frame starts properly.
+  LDA #%10010000
+  STA $2000    ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
+  LDA #%00011110
+  STA $2001 
 
-JSR CheckController 
-JSR UpdateSprite
-JSR draw_player
+  JSR DrawPlayer
+  JSR CheckWalkCycle
+  JSR CheckController 
 
-STA $2005
-STA $2005
-;This is the PPU clean up section, so rendering the next frame starts properly.
-LDA #%10010000
-STA $2000    ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
-LDA #%00011110
-STA $2001    ; enable sprites, enable background, no clipping on left side
+
+
+   ; enable sprites, enable background, no clipping on left side
 
 RTI           ; return from interrupt
 
@@ -157,12 +143,13 @@ vblankwait2:
   ; initialize zero-page values
 	LDA #$80
 	STA PlayerXPos
-	LDA #$a0
+	LDA #$9f
 	STA PlayerYPos
 
   JMP main
 
 main:
+
 
 LoadSprites:
   LDA #TotalSprites
@@ -178,19 +165,19 @@ LoadSpritesLoop:
   BNE LoadSpritesLoop
 
 LoadPalettes:
-  lda $2002
-  lda #$3f
-  sta $2006
-  lda #$00
-  sta $2006
-  ldx #$00
+  LDA $2002
+  LDA #$3f
+  STA $2006
+  LDA #$00
+  STA $2006
+  LDX #$00
 
 @loop:
-  lda palettes, x
-  sta $2007
+  LDA palettes, x
+  STA $2007
   inx
-  cpx #$20
-  bne @loop
+  CPX #$20
+  BNE @loop
 
 LoadBackground:
   LDA $2002               ; read PPU status to reset the high/low latch
@@ -228,40 +215,16 @@ LoadBackgroundLoop4:
   INX
   BNE LoadBackgroundLoop4
 
-; LoadAttribute:
-;   LDA $2002
-;   LDA #$23
-;   STA $2006
-;   LDA #$C2
-;   STA $2006
-;   LDA #$00
-; LoadAttributeLoop:
-;   LDA attributes, x
-;   STA $2007
-;   INX
-;   CPX #$08
-;   BNE LoadAttributeLoop
-
 enable_rendering:
-  lda #%10000000	; Enable NMI
-  sta $2000
-  lda #%00010000	; Enable Sprites
-  sta $2001
+  LDA #%10000000	; Enable NMI
+  STA $2000
+  LDA #%00010000	; Enable Sprites
+  STA $2001
 
 forever:
-  jmp forever
+  JMP forever
 
-
-.proc UpdateSprite
-  LDA #<SpriteRAM
-  STA $2003
-  LDA #>SpriteRAM
-  STA $4014
-
-  RTS
-.endproc
-
-.proc CheckController
+CheckController:
 	LDA #$01 
 	STA $4016             ; Strobing thew controller 
 	LDX #$00
@@ -296,17 +259,17 @@ CheckUp:
 EndController:
 	RTS 
 
-.endproc
+
 
 MovePlayerRight:
 LookRight:
   LDA #$17
   STA PlayerRam1
-    LDA #18
+  LDA #18
   STA PlayerRam2
-    LDA #$27
+  LDA #$27
   STA PlayerRam3
-    LDA #$28
+  LDA #$28
   STA PlayerRam4
   LDA #%00000001
   STA $0202
@@ -318,9 +281,12 @@ LookRight:
   LDX PlayerXPos
   LDY PlayerYPos
   JSR CheckCollision
-  BEQ RightCollision
+  BEQ :+
   DEC PlayerXPos
-RightCollision:
+
+:
+  LDA #$01
+  STA IsWalking
 
   RTS
 
@@ -347,9 +313,11 @@ LookLeft:
   LDX PlayerXPos
   LDY PlayerYPos
   JSR CheckCollision
-  BEQ LeftCollision
+  BEQ :+
   INC PlayerXPos
-LeftCollision:
+:
+  LDA #$01
+  STA IsWalking
 
   RTS
 
@@ -360,30 +328,108 @@ MovePlayerDown:
   LDX PlayerXPos
   LDY PlayerYPos
   JSR CheckCollision
-  BEQ DownCollision
+  BEQ :+
   DEC PlayerYPos
-
-DownCollision:
+:
+  LDA #$01
+  STA IsWalking
 
   RTS
 
 
 MovePlayerUp:
 
-
-
   DEC PlayerYPos
   LDX PlayerXPos
   LDY PlayerYPos
   JSR CheckCollision
-  BEQ UpCollision
+  BEQ :+
   INC PlayerYPos
-UpCollision:
+:
+  LDA #$01
+  STA IsWalking
 
   RTS
 
+CheckWalkCycle:
+  LDA IsWalking
+  BEQ NotWalking
+  DEC IsWalking
+
+  ; INC WalkCycleCounter
+  ; LDA WalkCycleCounter
+
+  ; CMP #WalkCycleTimePerFrame
+
+  ; BNE :+ 
+  ; LDA #$00
+  ; STA WalkCycleCounter
+
+  ; LDA #$13
+  ; STA PlayerRam2
+  ; LDA #$14
+  ; STA PlayerRam1
+  ; LDA #$23
+  ; STA PlayerRam4
+  ; LDA #$24
+  ; STA PlayerRam3
+
+;   INC WalkCycleFrame
+;  :
+ NotWalking: 
+  ; LDA #$00
+	; STA WalkCycleFrame
+	; STA WalkCycleCounter
+  LDA WalkCycleCounter
+  INC WalkCycleCounter
+  CMP #WalkCycleTimePerFrame
+  BNE :+
+  LDA #$00
+  STA WalkCycleCounter
+
+  LDA #$13
+  STA PlayerRam1
+  LDA #$14
+  STA PlayerRam2
+  LDA #$23
+  STA PlayerRam3
+  LDA #$24
+  STA PlayerRam4
+
+:
+  RTS
+
+
+.proc UpdateIdleState
+  LDA motionState
+  CMP #MotionState::Still
+  BEQ @update_timer
+  LDA timers
+  STA idleTimer
+  LDA #IdleState::Still
+  STA idleState
+  RTS
+@update_timer:
+  DEC idleTimer
+  BEQ @update_state
+  RTS
+@update_state:
+  LDX idleState
+  inx
+  CPX #4
+  BNE @set_state
+  LDX #0
+@set_state:
+  STX idleState
+  LDA timers, x
+  STA idleTimer
+  RTS
+timers:
+  .byte 245, 10, 10, 10
+.endproc
+
 ; ; X/64 + (Y/8 * 4)
-.proc CheckCollision
+CheckCollision:
   TXA
   LSR
   LSR
@@ -410,10 +456,8 @@ UpCollision:
   LDA ColissionMap, y 
   AND bitMask, x 
   RTS
-
-.endproc 
-
-.proc draw_player
+ 
+DrawPlayer:
   ; save registers
   PHP
   PHA
@@ -422,8 +466,7 @@ UpCollision:
   TYA
   PHA
 
-
-  ; ; write player tile numbers
+  ; write player tile numbers
   LDA #$11
   STA PlayerRam1
   LDA #$12
@@ -480,7 +523,7 @@ UpCollision:
   PLA
   PLP
   RTS
-.endproc
+
 
 palettes:
   ; Background Palette
@@ -502,6 +545,10 @@ sprites: ; pos_Y, Tile, attr, pos_X
   .byte $88, $21, $1, $80
   .byte $88, $22, $1, $88
 
+  ; .byte $55, $13, $01, $24 ; idle movement
+  ; .byte $55, $14, $01, $2c
+  ; .byte $5d, $23, $01, $24
+  ; .byte $5d, $24, $01, $2c
 
   ; .byte $55, $15, $01, $34 ; jump 
   ; .byte $55, $16, $01, $3c
